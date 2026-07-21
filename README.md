@@ -162,4 +162,4 @@ All three APIs (Groq, Google AI Studio, Tavily) offer free tiers.
 
 ## Author
 
-**Arnav Srivastava** — [LinkedIn](https://linkedin.com/in/mearnav) · [GitHub](https://github.com/mearnav)
+**Arnav Srivastava** — [LinkedIn](https://linkedin.com/in/mearnav) · [GitHub](https://github.com/mearnav) · [Portfolio](https://arnavsriportfolio.vercel.app/)
