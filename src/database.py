@@ -63,6 +63,8 @@ class Question(Base):
 
 def init_db():
     """Create the vault and its shelves if they don't exist yet."""
+    import os
+    os.makedirs(os.path.dirname(config.DB_PATH), exist_ok=True)  # ensure data/ exists
     Base.metadata.create_all(engine)
 
 

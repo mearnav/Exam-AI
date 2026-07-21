@@ -1,8 +1,12 @@
+import os
 import streamlit as st
 from src import database
-import os, tempfile
 
 st.set_page_config(page_title="Exam AI", page_icon="📝", layout="centered")
+
+# Ensure required folders exist (fresh servers won't have them)
+os.makedirs("data/chroma", exist_ok=True)
+os.makedirs("outputs", exist_ok=True)
 
 database.init_db()   # ensure the vault + its tables exist on startup
 
