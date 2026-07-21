@@ -1,0 +1,29 @@
+# App / UI
+streamlit
+
+# LLM APIs (free tiers)
+groq
+google-generativeai
+python-dotenv
+
+# RAG: local vector database (embeddings included, no API needed)
+chromadb
+
+# Relational storage
+SQLAlchemy
+
+# PDF create + read
+reportlab
+pdfplumber
+pymupdf
+
+# Diagrams / images (used in Phase 4)
+matplotlib
+pillow
+
+# Data handling
+pandas
+
+tavily-python
+
+google-genai
