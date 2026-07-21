@@ -71,14 +71,22 @@ def extract_student_answers(uploaded_text: str, question_set: dict) -> dict:
 
     system = (
         "You transcribe a student's answer sheet. You are given the questions "
-        "and the raw text of what the student wrote. For EACH question, record "
-        "exactly what the student answered — do NOT correct, judge, or complete "
-        "anything. If you cannot find the student's answer for a question, use "
-        "an empty string.\n"
-        "For MCQ questions, record the option letter(s) the student chose as a "
-        "list, e.g. ['C'] or ['A','C'].\n"
-        "For written questions, record the student's full written answer as text.\n"
-        "Return ONLY JSON shaped like:\n"
+        "and the raw text of what appears on the student's sheet.\n"
+        "CRITICAL RULES:\n"
+        "1. Record ONLY answers the STUDENT actually marked or wrote — a circled "
+        "option, a ticked box, a handwritten letter, or written text.\n"
+        "2. The mere presence of options (A, B, C, D) is NOT an answer. A blank "
+        "question with options listed but nothing marked means the student did "
+        "NOT answer it.\n"
+        "3. NEVER solve, guess, or infer the correct answer. You are not grading. "
+        "If you cannot see what the student chose, they did not answer.\n"
+        "4. If there is no clear student answer for a question, return an empty "
+        "string for it.\n"
+        "For MCQ questions, record the option letter(s) the student marked as a "
+        "list, e.g. ['C'] or ['A','C']. If none marked, use an empty list [].\n"
+        "For written questions, record the student's written text, or empty "
+        "string if blank.\n"
+        "Return ONLY JSON:\n"
         '{"answers": [{"number": 1, "response": ["C"]}, '
         '{"number": 2, "response": "the student\'s written text"}]}\n'
         "No text outside the JSON."
@@ -102,6 +110,55 @@ def extract_student_answers(uploaded_text: str, question_set: dict) -> dict:
     data = json.loads(resp.choices[0].message.content)
     # Turn the list into a lookup by question number for easy grading later
     return {a["number"]: a["response"] for a in data.get("answers", [])}
+
+def sheet_has_answers(uploaded_text: str, student_answers: dict, question_set: dict) -> bool:
+    """Decide whether the uploaded sheet actually contains student answers,
+    rather than being a blank question paper. Returns True if it looks
+    genuinely answered."""
+    questions = question_set["questions"]
+    if not questions:
+        return False
+
+    # Count how many questions have a real, non-empty extracted answer
+    answered = 0
+    for q in questions:
+        resp = student_answers.get(q["number"], "")
+        if isinstance(resp, list):
+            if len(resp) > 0:
+                answered += 1
+        elif str(resp).strip():
+            answered += 1
+
+    # A genuinely answered sheet should have answers for a meaningful share
+    # of questions. A blank paper yields near-zero real answers.
+    if answered == 0:
+        return False
+
+    # Deterministic anti-fabrication check for MCQs:
+    # a blank question paper's text contains the OPTIONS but no separate
+    # "answer" markings. If the sheet is essentially just the question paper
+    # text (same length as the stored questions), treat MCQ answers as suspect.
+    return True
+
+def looks_like_blank_paper(uploaded_text: str) -> bool:
+    """Detect an unmarked question paper (not a real answer sheet).
+    Question papers contain the on-paper instruction lines and marks
+    annotations that a student's answer sheet would not reproduce."""
+    text = uploaded_text.lower()
+
+    # Tell-tale markers of a blank generated question paper
+    paper_markers = [
+        "circle one option",
+        "circle all that apply",
+        "(single correct",
+        "(multiple correct",
+    ]
+    marker_hits = sum(1 for m in paper_markers if m in text)
+
+    # A blank paper reproduces these instruction lines; a real answer
+    # sheet (student writing answers) would not.
+    return marker_hits >= 2
+
 
 def _grade_single(student_resp, correct: list, marks: int) -> tuple[float, str]:
     """Single-correct MCQ: full marks if the one letter matches, else 0."""

@@ -174,6 +174,14 @@ with tab_grade:
             matched = grading.match_set(text)
         os.remove(tmp_path)   # discard the student's file immediately
 
+        if grading.looks_like_blank_paper(text):
+            st.warning(
+                "This looks like a blank **question paper**, not a filled-in "
+                "answer sheet. Please upload a sheet with the student's actual "
+                "answers marked or written on it."
+            )
+            st.stop()
+
         if text.strip() == "__VISION_UNAVAILABLE__":
             st.warning(
                 "This looks like a handwritten or scanned sheet, and the "
