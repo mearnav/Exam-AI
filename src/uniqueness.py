@@ -8,15 +8,18 @@ chroma_client = chromadb.PersistentClient(path=config.CHROMA_PATH)
 collection = chroma_client.get_or_create_collection(name="questions")
 
 
+def _get_collection():
+    return chroma_client.get_or_create_collection(name="questions")
+
 def is_duplicate(question_text: str) -> tuple[bool, float]:
     """Check a question's meaning against every past question.
     Returns (is_too_similar, closest_similarity_score)."""
     # If the vault is empty, nothing can be a duplicate yet
-    if collection.count() == 0:
+    if _get_collection().count() == 0:
         return False, 0.0
 
     # Ask Chroma for the single closest past question by meaning
-    result = collection.query(query_texts=[question_text], n_results=1)
+    result = _get_collection().query(query_texts=[question_text], n_results=1)
 
     distances = result.get("distances", [[]])[0]
     if not distances:

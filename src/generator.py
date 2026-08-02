@@ -136,27 +136,234 @@ def generate_unique_set(spec: dict, grounding: str, set_tag: str) -> dict:
     }
 
 
-if __name__ == "__main__":
-    uniqueness.chroma_client.delete_collection("questions")
-    uniqueness.collection = uniqueness.chroma_client.get_or_create_collection("questions")
+def generate_passage(spec: dict, word_count: int = 200) -> str:
+    """Generate an original reading-comprehension passage for the given spec.
+    The passage is what the comprehension questions will be based on."""
+    system = (
+        "You are an expert writer creating an ORIGINAL reading-comprehension "
+        "passage for students. Rules:\n"
+        "1. Write a single original passage — never copy existing text.\n"
+        "2. Match the reading level to the given grade exactly.\n"
+        "3. The passage must be self-contained and factually coherent, so "
+        "questions can be asked about it.\n"
+        f"4. Aim for about {word_count} words.\n"
+        "Return ONLY the passage text — no title, no questions, no commentary."
+    )
+    user = (
+        f"Grade/Class: {spec['grade']}\n"
+        f"Subject: {spec['subject']}\n"
+        f"Topic/theme: {spec.get('topic') or 'an age-appropriate general topic'}\n"
+        f"Difficulty: {spec['difficulty']}\n"
+        f"Write the passage now (~{word_count} words)."
+    )
+    resp = client.chat.completions.create(
+        model=config.TEXT_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.8,
+    )
+    return resp.choices[0].message.content.strip()
 
-    spec = {
-        "grade": 8, "subject": "Maths", "topic": None,
-        "count": 4, "difficulty": "medium", "assessment_type": "olympiad",
-        "question_format": "mcq",
-    }
-    grounding = (
-        "[Source 1] Class 8 Maths Olympiad: exponents and powers, algebraic "
-        "expressions, mensuration, data handling, rational numbers."
+def generate_passage_questions(spec: dict, passage: str) -> list[dict]:
+    """Generate comprehension questions answerable ONLY from the given passage,
+    each with its answer key. Questions are tied to this exact passage."""
+    needs_marks = spec.get("assessment_type") in config.MARKS_REQUIRED_TYPES
+    marks_rule = (
+        "Assign a 'marks' value (integer) to each question based on difficulty."
+        if needs_marks else "Set 'marks' to null for every question."
     )
 
-    result = generate_unique_set(spec, grounding, "mcqtest")
+    system = (
+        "You are an expert exam setter writing reading-comprehension questions "
+        "about a SPECIFIC passage the student will be given.\n"
+        "Rules:\n"
+        "1. Every question must be answerable ONLY from the passage provided. "
+        "Do not ask about anything not stated in the passage.\n"
+        "2. Write the correct answer for each question, drawn from the passage.\n"
+        f"3. {marks_rule}\n"
+        "4. These are written-answer comprehension questions: set 'q_type' to "
+        "'written', 'options' to [], and 'correct_options' to [] for each.\n"
+        "5. Return ONLY JSON shaped exactly like:\n"
+        '{"questions": [{"number": 1, "topic": "comprehension", '
+        '"q_type": "written", "question": "...", "options": [], '
+        '"correct_options": [], "answer": "...", "marks": 2}]}\n'
+        "No text outside the JSON."
+    )
+    user = (
+        f"Create exactly {spec['count']} comprehension questions.\n"
+        f"Grade/Class: {spec['grade']}\n"
+        f"Difficulty: {spec['difficulty']}\n\n"
+        f"PASSAGE:\n{passage}"
+    )
 
-    for q in result["questions"]:
+    resp = client.chat.completions.create(
+        model=config.TEXT_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.7,
+    )
+    data = json.loads(resp.choices[0].message.content)
+    return data.get("questions", [])
+
+
+def is_comprehension(spec: dict) -> bool:
+    """Detect whether this request is a reading-comprehension set."""
+    fields = f"{spec.get('subject','')} {spec.get('topic','')}".lower()
+    return "comprehension" in fields
+
+
+def generate_set_with_passage(spec: dict, grounding: str, set_tag: str) -> dict:
+    """Top-level generation: comprehension -> passage; diagram -> diagrams;
+    otherwise the normal unique-set pipeline."""
+    if is_comprehension(spec):
+        passage = generate_passage(spec, word_count=spec.get("word_count", 200))
+        questions = generate_passage_questions(spec, passage)
+        for i, q in enumerate(questions, start=1):
+            q["number"] = i
+        return {"questions": questions, "requested": spec["count"],
+                "delivered": len(questions), "attempts": 1,
+                "short": len(questions) < spec["count"], "passage": passage}
+    # If it's a diagram set, use the diagram-aware question generator
+    if is_diagram_set(spec):
+        questions = generate_diagram_questions(spec, grounding)
+        for i, q in enumerate(questions, start=1):
+            q["number"] = i
+        questions = attach_diagrams(questions, set_tag)
+        return {"questions": questions, "requested": spec["count"],
+                "delivered": len(questions), "attempts": 1,
+                "short": len(questions) < spec["count"], "passage": None}
+
+    # If it's a map set, generate questions then attach labeling maps
+    if is_map_set(spec):
+        questions = generate_diagram_questions(spec, grounding)  # reuse: written Qs
+        for i, q in enumerate(questions, start=1):
+            q["number"] = i
+        questions = attach_maps(questions, set_tag)
+        return {"questions": questions, "requested": spec["count"],
+                "delivered": len(questions), "attempts": 1,
+                "short": len(questions) < spec["count"], "passage": None}
+
+    result = generate_unique_set(spec, grounding, set_tag)
+    result["passage"] = None
+    return result
+
+def is_diagram_set(spec: dict) -> bool:
+    """Detect whether this request is a diagram-based set."""
+    fields = f"{spec.get('subject','')} {spec.get('topic','')}".lower()
+    return "diagram" in fields
+
+
+def attach_diagrams(questions: list[dict], set_tag: str) -> list[dict]:
+    """For a diagram set, generate a diagram (or blank space) per question and
+    attach its file path. The diagram engine draws only what it can do
+    accurately; complex ones become a labeled blank space."""
+    import os
+    from src import diagrams
+    for q in questions:
+        plan = diagrams.plan_diagram(q["question"])
+        if plan["type"] == "none":
+            q["diagram_path"] = None
+            continue
+        out_path = os.path.join(
+            config.OUTPUT_DIR, f"diagram_{set_tag}_q{q['number']}.png")
+        path = diagrams.render_diagram_for_question(plan, out_path)
+        q["diagram_path"] = path
+    return questions
+
+def generate_diagram_questions(spec: dict, grounding: str) -> list[dict]:
+    """Generate questions for a diagram set that are ALWAYS answerable given
+    what our diagram engine can produce. Key rule: never ask a student to
+    'label a provided diagram' of something we can't draw — because we can't
+    supply it. Complex topics must be 'draw and label' (student draws)."""
+    needs_marks = spec.get("assessment_type") in config.MARKS_REQUIRED_TYPES
+    marks_rule = (
+        "Assign a 'marks' value (integer) per question based on difficulty."
+        if needs_marks else "Set 'marks' to null for every question."
+    )
+    system = (
+        "You are an exam setter creating ORIGINAL diagram-based questions.\n"
+        "CRITICAL rules about diagrams:\n"
+        "1. The system can accurately draw ONLY two things: linear food chains "
+        "and simple cycles (like the water cycle). For these, you may ask the "
+        "student to study/label the provided diagram.\n"
+        "2. For ANY other diagram (anatomy, organs, plant/flower parts, cell "
+        "structure, apparatus, etc.), the system CANNOT provide a pre-drawn "
+        "diagram. So you MUST phrase these as 'Draw and label ...' so the "
+        "student draws it themselves. NEVER write 'Label the given/provided "
+        "diagram of X' for these — no diagram will exist for them to label.\n"
+        "3. Prefer a mix: some 'draw and label' questions, some food-chain or "
+        "cycle questions, and optionally plain written questions.\n"
+        "4. Write all questions and answers in plain text (no LaTeX).\n"
+        f"5. {marks_rule}\n"
+        "6. Each question is written-answer: q_type 'written', options [], "
+        "correct_options [].\n"
+        "Return ONLY JSON:\n"
+        '{"questions": [{"number": 1, "topic": "...", "q_type": "written", '
+        '"question": "...", "options": [], "correct_options": [], '
+        '"answer": "...", "marks": 2}]}\n'
+        "No text outside the JSON."
+    )
+    user = (
+        f"Create exactly {spec['count']} diagram-based questions.\n"
+        f"Grade/Class: {spec['grade']}\nSubject: {spec['subject']}\n"
+        f"Topic: {spec.get('topic') or 'general diagrams'}\n"
+        f"Difficulty: {spec['difficulty']}\n\n"
+        f"Reference (grounding only, do not copy):\n{grounding}"
+    )
+    resp = client.chat.completions.create(
+        model=config.TEXT_MODEL,
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": user}],
+        response_format={"type": "json_object"},
+        temperature=0.7,
+    )
+    data = json.loads(resp.choices[0].message.content)
+    return data.get("questions", [])
+
+
+def is_map_set(spec: dict) -> bool:
+    """Detect whether this is a map-labeling set."""
+    fields = f"{spec.get('subject','')} {spec.get('topic','')}".lower()
+    return "map" in fields
+
+
+def attach_maps(questions: list[dict], set_tag: str) -> list[dict]:
+    """For a map set, generate a labeling map per question and attach its path
+    plus the answer key (what each numbered marker is)."""
+    import os
+    from src import maps
+    for q in questions:
+        plan = maps.plan_map(q["question"])
+        if not plan["markers"] or not plan["country"]:
+            q["diagram_path"] = None
+            continue
+        out_path = os.path.join(config.OUTPUT_DIR, f"map_{set_tag}_q{q['number']}.png")
+        path = maps.draw_labeling_map(plan["country"], plan["markers"], out_path)
+        q["diagram_path"] = path
+        # store the answer key for the markers (number -> location)
+        q["map_answer_key"] = {str(i): m["label"]
+                               for i, m in enumerate(plan["markers"], start=1)}
+    return questions
+
+
+if __name__ == "__main__":
+    sample_spec = {
+        "grade": 5, "subject": "English", "topic": "Comprehension",
+        "count": 3, "difficulty": "hard", "assessment_type": "test",
+        "question_format": "written",
+    }
+    passage = generate_passage(sample_spec, word_count=200)
+    print("--- PASSAGE ---\n")
+    print(passage)
+
+    print("\n--- QUESTIONS ABOUT THIS PASSAGE ---")
+    questions = generate_passage_questions(sample_spec, passage)
+    for q in questions:
         marks = f"({q['marks']} marks)" if q.get("marks") is not None else ""
-        print(f"\nQ{q['number']} [{q['q_type'].upper()}] {marks}")
-        print(f"  {q['question']}")
-        for opt in q.get("options", []):
-            print(f"     {opt}")
-        print(f"  Correct: {q.get('correct_options')}")
-        print(f"  Why: {q['answer']}")
+        print(f"\nQ{q['number']}) {q['question']} {marks}")
+        print(f"   Answer: {q['answer']}")

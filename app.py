@@ -117,16 +117,23 @@ with tab_create:
         from src import agent, search, generator, database
         spec = st.session_state.spec
 
+        # Make sure diagram/comprehension intent from the prompt reaches the spec
+        prompt_lower = st.session_state.prompt.lower()
+        if "diagram" in prompt_lower and "diagram" not in str(spec.get("topic","")).lower():
+            spec["topic"] = ((spec.get("topic") or "").strip() + " diagrams").strip()
+        if "comprehension" in prompt_lower and "comprehension" not in str(spec.get("topic","")).lower():
+            spec["topic"] = ((spec.get("topic") or "").strip() + " comprehension").strip()
+
         with st.spinner("Generating questions and checking uniqueness..."):
             if st.session_state.get("upload_grounding"):
-                grounding = st.session_state.upload_grounding      # teacher's own
+                grounding = st.session_state.upload_grounding
             else:
                 keywords = agent.build_search_keywords(spec, st.session_state.prompt)
                 references = search.gather_reference(keywords)
-                grounding = search.format_for_prompt(references)   # web search
+                grounding = search.format_for_prompt(references)
 
-            result = generator.generate_unique_set(spec, grounding, "app")
-            set_id = database.save_question_set(spec, result["questions"])
+            result = generator.generate_set_with_passage(spec, grounding, "app")
+            set_id = database.save_question_set(spec, result["questions"], result.get("passage"))
             q_path, a_path = database.generate_and_link_pdfs(set_id)
 
         loaded = database.load_question_set(set_id)

@@ -27,3 +27,5 @@ pandas
 tavily-python
 
 google-genai
+
+geopandas

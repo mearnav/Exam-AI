@@ -36,6 +36,7 @@ class QuestionSet(Base):
     # File paths — filled in the NEXT step when we generate the PDFs
     question_pdf_path = Column(String, nullable=True)
     answer_pdf_path = Column(String, nullable=True)
+    passage = Column(Text, nullable=True)   # reading passage (comprehension only)
 
     questions = relationship(
         "Question", back_populates="question_set",
@@ -56,6 +57,8 @@ class Question(Base):
     q_type = Column(String, default="written")   # 'written', 'single', 'multiple'
     options_json = Column(Text, default="[]")     # options list, sealed as JSON
     correct_json = Column(Text, default="[]")     # correct letters, sealed as JSON
+    diagram_path = Column(String, nullable=True)   # per-question diagram image
+    map_answer_json = Column(Text, default="{}")   # {'1':'Delhi',...} for maps
     marks = Column(Integer, nullable=True)
 
     question_set = relationship("QuestionSet", back_populates="questions")
@@ -109,7 +112,7 @@ def next_set_number(session, grade, subject, topic) -> int:
     return existing + 1
 
 
-def save_question_set(spec: dict, questions: list[dict]) -> int:
+def save_question_set(spec: dict, questions: list[dict], passage: str = None) -> int:
     """Seal a generated set (with its answer key + registry name)."""
     session = SessionLocal()
     try:
@@ -131,6 +134,7 @@ def save_question_set(spec: dict, questions: list[dict]) -> int:
             difficulty=spec["difficulty"],
             assessment_type=spec["assessment_type"],
             count=spec["count"],
+            passage=passage,
         )
         for q in questions:
             q_set.questions.append(Question(
@@ -141,6 +145,8 @@ def save_question_set(spec: dict, questions: list[dict]) -> int:
                 answer_text=q["answer"],
                 options_json=json.dumps(q.get("options", [])),      # seal list -> text
                 correct_json=json.dumps(q.get("correct_options", [])),
+                diagram_path=q.get("diagram_path"),
+                map_answer_json=json.dumps(q.get("map_answer_key", {})),
                 marks=q.get("marks"),
             ))
         session.add(q_set)
@@ -169,6 +175,7 @@ def load_question_set(set_id: int) -> dict | None:
             "topic": q_set.topic,
             "difficulty": q_set.difficulty,
             "assessment_type": q_set.assessment_type,
+            "passage": q_set.passage,
             "questions": [
                 {
                     "number": q.number,
@@ -177,6 +184,8 @@ def load_question_set(set_id: int) -> dict | None:
                     "answer": q.answer_text,
                     "options": json.loads(q.options_json or "[]"),      # text -> list
                     "correct_options": json.loads(q.correct_json or "[]"),
+                    "diagram_path": q.diagram_path,
+                    "map_answer_key": json.loads(q.map_answer_json or "{}"),
                     "marks": q.marks,
                 }
                 for q in sorted(q_set.questions, key=lambda x: x.number)

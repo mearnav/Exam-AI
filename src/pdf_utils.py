@@ -5,6 +5,7 @@ from reportlab.lib.units import mm
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 from src import config
+from reportlab.platypus import Image
 
 def _mcq_instruction(q_type: str) -> str:
     """The 'how to answer' line shown under an MCQ, based on its type."""
@@ -54,6 +55,12 @@ def _styles():
                               spaceBefore=1))
     styles.add(ParagraphStyle(name="TotalLine", parent=styles["Title"],
                               fontSize=14, spaceBefore=6, spaceAfter=10))
+    styles.add(ParagraphStyle(name="PassageHeading", parent=styles["Normal"],
+                              fontSize=11, spaceBefore=6, spaceAfter=4,
+                              textColor="#1a3d6b", fontName="Helvetica-Bold"))
+    styles.add(ParagraphStyle(name="PassageBody", parent=styles["Normal"],
+                              fontSize=10.5, leading=15, spaceAfter=10,
+                              leftIndent=6, rightIndent=6))
     return styles
 
 
@@ -89,12 +96,33 @@ def create_question_pdf(set_data: dict, output_path: str) -> str:
                             bottomMargin=20*mm, leftMargin=18*mm, rightMargin=18*mm)
     story = _header(set_data, styles, set_data["name"], total)
 
+    # If this set has a reading passage, print it above the questions
+    passage = set_data.get("passage")
+    if passage:
+        story.append(Paragraph("Reading Passage", styles["PassageHeading"]))
+        # Split into paragraphs so it renders with proper spacing
+        for para in passage.split("\n"):
+            if para.strip():
+                story.append(Paragraph(escape(para.strip()), styles["PassageBody"]))
+        story.append(Spacer(1, 6))
+        story.append(HRFlowable(width="100%", thickness=0.5, color="#cccccc"))
+        story.append(Spacer(1, 6))
+
     for q in questions:
         marks = q.get("marks")
         marks_txt = f' &nbsp;&nbsp;<b>({_marks_label(marks)})</b>' if marks is not None else ""
         line = f'<b>Q{q["number"]})</b> {escape(q["question"])}{marks_txt}'
         story.append(Paragraph(line, styles["QItem"]))
 
+        diagram_path = q.get("diagram_path")
+        if diagram_path and os.path.exists(diagram_path):
+            story.append(Spacer(1, 6))
+            img = Image(diagram_path)
+            img._restrictSize(400, 220)   # cap size so it fits the page
+            img.hAlign = "LEFT"
+            story.append(img)
+            story.append(Spacer(1, 6))
+        
         options = q.get("options", [])
         if options:
             # MCQ: print the instruction, then each option indented
@@ -122,6 +150,16 @@ def create_answer_pdf(set_data: dict, output_path: str) -> str:
                             bottomMargin=20*mm, leftMargin=18*mm, rightMargin=18*mm)
     story = _header(set_data, styles, set_data["answer_name"], total)
 
+    passage = set_data.get("passage")
+    if passage:
+        story.append(Paragraph("Reading Passage", styles["PassageHeading"]))
+        for para in passage.split("\n"):
+            if para.strip():
+                story.append(Paragraph(escape(para.strip()), styles["PassageBody"]))
+        story.append(Spacer(1, 6))
+        story.append(HRFlowable(width="100%", thickness=0.5, color="#cccccc"))
+        story.append(Spacer(1, 6))
+
     for q in questions:
         marks = q.get("marks")
         marks_txt = f' &nbsp;&nbsp;<b>({_marks_label(marks)})</b>' if marks is not None else ""
@@ -138,6 +176,14 @@ def create_answer_pdf(set_data: dict, output_path: str) -> str:
         else:
             story.append(Paragraph(f'<b>Ans:</b> {escape(q["answer"])}', styles["AItem"]))
 
+        # If this question is a map with numbered markers, list what each is
+        map_key = q.get("map_answer_key")
+        if map_key:
+            pairs = ", ".join(f"{num} = {name}"
+                              for num, name in sorted(map_key.items(),
+                                                      key=lambda x: int(x[0])))
+            story.append(Paragraph(f'<b>Map key:</b> {escape(pairs)}', styles["AItem"]))
+            
     doc.build(story)
     return output_path
 
@@ -151,39 +197,6 @@ def create_pdfs_for_set(set_data: dict) -> tuple[str, str]:
     create_question_pdf(set_data, q_path)
     create_answer_pdf(set_data, a_path)
     return q_path, a_path
-
-
-if __name__ == "__main__":
-    from datetime import datetime, timezone
-    sample = {
-        "name": "Class 8th Maths set-1",
-        "answer_name": "Answer sheet for Class 8th Maths set-1",
-        "grade": 8, "subject": "Maths", "topic": None,
-        "difficulty": "medium", "assessment_type": "olympiad",
-        "created_at": datetime.now(timezone.utc),
-        "questions": [
-            {"number": 1, "q_type": "single",
-             "question": "What is the value of 2^3?",
-             "options": ["A) 4", "B) 6", "C) 8", "D) 10"],
-             "correct_options": ["C"],
-             "answer": "2^3 = 2*2*2 = 8", "marks": 2},
-            {"number": 2, "q_type": "multiple",
-             "question": "Which of these are properties of a rectangle?",
-             "options": ["A) All sides equal", "B) Opposite sides equal",
-                         "C) All angles 90 degrees", "D) Diagonals unequal"],
-             "correct_options": ["B", "C"],
-             "answer": "Opposite sides are equal and all angles are right angles.",
-             "marks": 4},
-            {"number": 3, "q_type": "written",
-             "question": "Explain why 1/2 is greater than 1/4.",
-             "options": [], "correct_options": [],
-             "answer": "Halves are bigger pieces than quarters, so 1/2 > 1/4.",
-             "marks": 3},
-        ],
-    }
-    q_path, a_path = create_pdfs_for_set(sample)
-    print("Question paper:", q_path)
-    print("Answer sheet: ", a_path)
 
 def create_scored_pdf(set_data: dict, report: dict, student_name: str,
                       output_path: str) -> str:
@@ -251,3 +264,36 @@ def _fmt_response(resp) -> str:
     if isinstance(resp, list):
         return ", ".join(resp) if resp else "(blank)"
     return str(resp) if str(resp).strip() else "(blank)"
+
+
+if __name__ == "__main__":
+    from datetime import datetime, timezone
+    from src import diagrams
+    import os
+
+    # Generate a real diagram to embed
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    diag_path = os.path.join(config.OUTPUT_DIR, "pdftest_foodchain.png")
+    diagrams.draw_food_chain(["Sun", "Grass", "Rabbit", "Fox"], diag_path)
+
+    sample = {
+        "name": "Class 7th Science (Diagrams) set-1",
+        "answer_name": "Answer sheet for Class 7th Science (Diagrams) set-1",
+        "grade": 7, "subject": "Science", "topic": "Diagrams",
+        "difficulty": "easy", "assessment_type": "test",
+        "created_at": datetime.now(timezone.utc),
+        "questions": [
+            {"number": 1, "q_type": "written",
+             "question": "Study the food chain below and name the top predator.",
+             "options": [], "correct_options": [],
+             "diagram_path": diag_path,
+             "answer": "The fox is the top predator.", "marks": 3},
+            {"number": 2, "q_type": "written",
+             "question": "Explain what a food chain shows.",
+             "options": [], "correct_options": [],
+             "answer": "It shows how energy passes from one organism to another.", "marks": 3},
+        ],
+    }
+    q_path, a_path = create_pdfs_for_set(sample)
+    print("Question paper:", q_path)
+    print("Answer sheet: ", a_path)
