@@ -158,8 +158,3 @@ All three APIs (Groq, Google AI Studio, Tavily) offer free tiers.
 - **Written-answer grading** is AI-assisted and flagged for teacher review — the system is designed to support the teacher's judgement, not replace it.
 - **Grading integrity.** The answer-transcription step is deliberately isolated from the answer key and constrained to record only what a student actually marked — never to solve questions itself. A deterministic guard also detects unanswered question papers and declines to grade them, rather than producing a misleading score.
 
----
-
-## Author
-
-**Arnav Srivastava** — [LinkedIn](https://linkedin.com/in/mearnav) · [GitHub](https://github.com/mearnav) · [Portfolio](https://arnavsriportfolio.vercel.app/)
