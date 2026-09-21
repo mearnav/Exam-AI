@@ -9,7 +9,7 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 
 # --- Models ---
-TEXT_MODEL = "llama-3.3-70b-versatile"
+TEXT_MODEL = "openai/gpt-oss-120b"
 
 # --- Question-set requirements ---
 # The details a complete request needs. The agent asks for any of these
