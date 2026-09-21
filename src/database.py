@@ -91,7 +91,16 @@ def list_sets() -> list[dict]:
 
 def _build_set_name(grade, subject, topic, set_number: int) -> str:
     """Compose the human-readable registry name for a set."""
-    base = f"Class {_ordinal(int(grade))} {str(subject).title()}"
+    # Grade may arrive as None, "", "9th", or 9 — normalize safely
+    grade_str = ""
+    if grade is not None and str(grade).strip():
+        # pull digits out of things like "9th" or "class 9"
+        digits = "".join(ch for ch in str(grade) if ch.isdigit())
+        grade_str = f"Class {_ordinal(int(digits))} " if digits else ""
+
+    subject_str = str(subject).title() if subject else "General"
+    base = f"{grade_str}{subject_str}".strip()
+
     if topic and str(topic).lower() not in ("", "none", "any", "null"):
         base += f" ({str(topic).title()})"
     return f"{base} set-{set_number}"

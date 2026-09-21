@@ -63,14 +63,26 @@ def build_generation_prompt(spec: dict, grounding: str) -> list[dict]:
         "No text outside the JSON."
     )
 
+    topic = spec.get("topic")
+    if topic and str(topic).lower() not in ("", "none", "any", "null"):
+        topic_rule = (
+            f"IMPORTANT: Every question MUST be strictly about the topic "
+            f"'{topic}'. Do not include questions from any other topic. "
+            f"If the subject is Maths and the topic is 'Algebra', ask only "
+            f"algebra questions (equations, expressions, factoring, etc.) — "
+            f"not geometry, arithmetic, or other areas."
+        )
+    else:
+        topic_rule = "Cover a suitable range of topics for the subject and grade."
+
     user = (
         f"Create exactly {spec['count']} questions.\n"
         f"Grade/Class: {spec['grade']}\n"
         f"Subject: {spec['subject']}\n"
-        f"Topic focus: {spec.get('topic') or 'any suitable topics'}\n"
         f"Difficulty: {spec['difficulty']}\n"
         f"Assessment type: {spec['assessment_type']}\n"
-        f"Question format: {fmt}\n\n"
+        f"Question format: {spec.get('question_format', 'written')}\n"
+        f"{topic_rule}\n\n"
         f"Reference material (for grounding only, do NOT copy):\n{grounding}"
     )
 
@@ -233,7 +245,7 @@ def generate_set_with_passage(spec: dict, grounding: str, set_tag: str) -> dict:
         questions = generate_diagram_questions(spec, grounding)
         for i, q in enumerate(questions, start=1):
             q["number"] = i
-        questions = attach_diagrams(questions, set_tag)
+        questions = attach_diagrams(questions, set_tag, spec.get("subject", ""))
         return {"questions": questions, "requested": spec["count"],
                 "delivered": len(questions), "attempts": 1,
                 "short": len(questions) < spec["count"], "passage": None}
@@ -258,21 +270,17 @@ def is_diagram_set(spec: dict) -> bool:
     return "diagram" in fields
 
 
-def attach_diagrams(questions: list[dict], set_tag: str) -> list[dict]:
-    """For a diagram set, generate a diagram (or blank space) per question and
-    attach its file path. The diagram engine draws only what it can do
-    accurately; complex ones become a labeled blank space."""
+def attach_diagrams(questions: list[dict], set_tag: str, subject: str = "") -> list[dict]:
+    """For a diagram set, generate a diagram (or blank space) per question."""
     import os
     from src import diagrams
     for q in questions:
-        plan = diagrams.plan_diagram(q["question"])
+        plan = diagrams.plan_diagram(q["question"], subject)   # <-- pass subject
         if plan["type"] == "none":
             q["diagram_path"] = None
             continue
-        out_path = os.path.join(
-            config.OUTPUT_DIR, f"diagram_{set_tag}_q{q['number']}.png")
-        path = diagrams.render_diagram_for_question(plan, out_path)
-        q["diagram_path"] = path
+        out_path = os.path.join(config.OUTPUT_DIR, f"diagram_{set_tag}_q{q['number']}.png")
+        q["diagram_path"] = diagrams.render_diagram_for_question(plan, out_path)
     return questions
 
 def generate_diagram_questions(spec: dict, grounding: str) -> list[dict]:

@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from src import config
 import math
+import matplotlib.patches as mpatches   # (near the other imports, if not present)
 
 
 import json
@@ -119,41 +120,60 @@ def draw_blank_space(label: str, output_path: str) -> str:
 
 
 
-def plan_diagram(question_text: str) -> dict:
+def plan_diagram(question_text: str, subject: str = "") -> dict:
     """Decide what diagram (if any) a question needs, and supply its structure.
-    Returns {'type': 'food_chain'|'cycle'|'complex'|'none', 'items': [...],
-    'caption': '...'}. The LLM only classifies and lists items — it never draws."""
+    Subject-aware: won't draw a science diagram (e.g. water cycle) on a
+    non-science set. Returns {'type','items','caption'}."""
+    subject_l = str(subject).lower()
+    is_science = any(s in subject_l for s in ("science", "biology", "physics",
+                                              "chemistry", "environment", "evs"))
+
+    cycle_rule = (
+        "'cycle' is allowed ONLY for science subjects (water cycle, life cycle). "
+        if is_science else
+        "Do NOT use 'cycle' — this is not a science subject, so never produce a "
+        "water cycle, life cycle, or any science diagram. "
+    )
+
     system = (
         "You analyze a diagram-related exam question and decide how to illustrate it.\n"
         "Return ONLY JSON: {\"type\": \"...\", \"items\": [...], \"caption\": \"...\"}.\n"
+        f"Subject of this exam: {subject or 'general'}.\n"
         "'type' must be one of:\n"
-        "- 'food_chain': a linear food chain / sequence. Provide 'items' as an "
-        "ordered list of 3-6 labels, e.g. ['Sun','Grass','Rabbit','Fox'].\n"
-        "- 'cycle': a repeating cycle (water cycle, life cycle). Provide 'items' "
-        "as an ordered list of 3-6 stage labels.\n"
-        "- 'complex': anatomy or detailed structures that cannot be drawn simply "
-        "(flower parts, human organs, cell structure). Leave 'items' empty [].\n"
-        "- 'none': the question does not actually need a diagram. Leave 'items' [].\n"
-        "'caption' is a short instruction line for the diagram (e.g. 'Label the "
-        "stages of the water cycle' or 'Draw and label the parts of a flower').\n"
-        "Only use 'food_chain' or 'cycle' when you are confident of the correct, "
-        "factual items. If unsure, use 'complex'. No text outside the JSON."
+        "- 'food_chain': a linear food chain (science only). Ordered list of 3-6 labels.\n"
+        f"- 'cycle': a repeating cycle. {cycle_rule}Ordered list of 3-6 stage labels.\n"
+        "- 'complex': anatomy/detailed structures that can't be drawn simply. "
+        "Empty 'items'.\n"
+        "- 'none': the question does not need a diagram. Empty 'items'.\n"
+        "'caption' is a short instruction line for the diagram.\n"
+        "Only use 'food_chain' or 'cycle' when confident of the correct factual "
+        "items AND the subject allows it. If unsure, use 'complex' or 'none'. "
+        "No text outside the JSON."
     )
     resp = _client.chat.completions.create(
         model=config.TEXT_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": question_text},
-        ],
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": question_text}],
         response_format={"type": "json_object"},
         temperature=0,
     )
     data = json.loads(resp.choices[0].message.content)
-    return {
+    result = {
         "type": data.get("type", "none"),
         "items": data.get("items", []),
         "caption": data.get("caption", ""),
     }
+
+    # Deterministic guard: food chains and cycles are science-only. If the model
+    # picked one for a non-science subject, override to a 'draw it' space.
+    subject_given = bool(str(subject).strip())
+    if subject_given and not is_science and result["type"] in ("food_chain", "cycle"):
+        result["type"] = "complex"
+        result["items"] = []
+        if not result["caption"]:
+            result["caption"] = "Draw and label the diagram"
+
+    return result
 
 
 def render_diagram_for_question(plan: dict, output_path: str) -> str | None:
@@ -170,6 +190,45 @@ def render_diagram_for_question(plan: dict, output_path: str) -> str | None:
     if d_type == "complex":
         return draw_blank_space(caption, output_path)
     return None   # 'none' or invalid — no diagram
+
+
+def draw_venn2(set_a: str, set_b: str, regions: dict, output_path: str) -> str:
+    """Draw a 2-circle Venn diagram with numbers in each region.
+    regions = {'a_only': 22, 'b_only': 15, 'both': 8}."""
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 7)
+    ax.axis("off")
+    ax.set_aspect("equal")
+
+    # two overlapping circles
+    c1 = mpatches.Circle((4, 3.5), 2.4, fill=False, linewidth=1.8, edgecolor="#2c3e50")
+    c2 = mpatches.Circle((6, 3.5), 2.4, fill=False, linewidth=1.8, edgecolor="#2c3e50")
+    ax.add_patch(c1)
+    ax.add_patch(c2)
+
+    # set titles above each circle
+    ax.text(2.6, 6.2, set_a, ha="center", fontsize=11, fontweight="bold")
+    ax.text(7.4, 6.2, set_b, ha="center", fontsize=11, fontweight="bold")
+
+    # numbers in each region
+    ax.text(3.0, 3.5, str(regions.get("a_only", "")), ha="center", va="center", fontsize=13)
+    ax.text(7.0, 3.5, str(regions.get("b_only", "")), ha="center", va="center", fontsize=13)
+    ax.text(5.0, 3.5, str(regions.get("both", "")), ha="center", va="center", fontsize=13)
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+if __name__ == "__main__":
+    draw_venn2("Math Club", "Arts Club",
+               {"a_only": 22, "b_only": 15, "both": 8},
+               os.path.join(config.OUTPUT_DIR, "test_venn2.png"))
+    print("Venn diagram saved.")
+
+
 
 
 if __name__ == "__main__":
